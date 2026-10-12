@@ -2,16 +2,34 @@ import json
 
 import frappe
 from frappe import _
+from twilio.request_validator import RequestValidator
 from werkzeug.wrappers import Response
 
 from telephony.utils import link_call_with_contact, link_call_with_doc
 
 from .twilio_handler import IncomingCall, Twilio, TwilioCallDetails
+from .utils import get_public_url
 
 
 @frappe.whitelist()
 def is_enabled():
     return frappe.db.get_single_value("TP Twilio Settings", "enabled")
+
+
+def validate_twilio_request():
+    """Rejects webhook requests that are not signed with the Twilio auth token."""
+    settings = frappe.get_cached_doc("TP Twilio Settings")
+    auth_token = settings.enabled and settings.get_password(
+        "auth_token", raise_exception=False
+    )
+    url = get_public_url(frappe.request.path)
+    if frappe.request.query_string:
+        url += "?" + frappe.request.query_string.decode()
+    signature = frappe.request.headers.get("X-Twilio-Signature", "")
+
+    validator = auth_token and RequestValidator(auth_token)
+    if not (validator and validator.validate(url, frappe.request.form, signature)):
+        frappe.throw(_("Invalid Twilio request signature"), frappe.PermissionError)
 
 
 @frappe.whitelist()
@@ -40,6 +58,7 @@ def generate_access_token():
 @frappe.whitelist(allow_guest=True)
 def voice(**kwargs):
     """This is a webhook called by twilio to get instructions when the voice call request comes to twilio server."""
+    validate_twilio_request()
 
     def _get_caller_number(caller):
         identity = caller.replace("client:", "").strip()
@@ -68,6 +87,7 @@ def voice(**kwargs):
 
 @frappe.whitelist(allow_guest=True)
 def twilio_incoming_call_handler(**kwargs):
+    validate_twilio_request()
     args = frappe._dict(kwargs)
     call_details = TwilioCallDetails(args)
     create_call_log(call_details)
@@ -143,6 +163,7 @@ def update_call_log(call_sid, status=None):
 
 @frappe.whitelist(allow_guest=True)
 def update_recording_info(**kwargs):
+    validate_twilio_request()
     try:
         args = frappe._dict(kwargs)
         recording_url = args.RecordingUrl
@@ -155,6 +176,7 @@ def update_recording_info(**kwargs):
 
 @frappe.whitelist(allow_guest=True)
 def update_call_status_info(**kwargs):
+    validate_twilio_request()
     try:
         args = frappe._dict(kwargs)
         parent_call_sid = args.ParentCallSid
