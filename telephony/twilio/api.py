@@ -2,13 +2,13 @@ import json
 
 import frappe
 from frappe import _
+from frappe.utils import get_host_name_from_request
 from twilio.request_validator import RequestValidator
 from werkzeug.wrappers import Response
 
 from telephony.utils import link_call_with_contact, link_call_with_doc
 
 from .twilio_handler import IncomingCall, Twilio, TwilioCallDetails
-from .utils import get_public_url
 
 
 @frappe.whitelist()
@@ -16,20 +16,26 @@ def is_enabled():
     return frappe.db.get_single_value("TP Twilio Settings", "enabled")
 
 
-def validate_twilio_request():
+def validate_twilio_request() -> None:
     """Rejects webhook requests that are not signed with the Twilio auth token."""
     settings = frappe.get_cached_doc("TP Twilio Settings")
     auth_token = settings.enabled and settings.get_password(
         "auth_token", raise_exception=False
     )
-    url = get_public_url(frappe.request.path)
-    if frappe.request.query_string:
-        url += "?" + frappe.request.query_string.decode()
-    signature = frappe.request.headers.get("X-Twilio-Signature", "")
+    if not auth_token:
+        frappe.throw(_("Twilio is not configured"), frappe.PermissionError)
 
-    validator = auth_token and RequestValidator(auth_token)
-    if not (validator and validator.validate(url, frappe.request.form, signature)):
+    signature = frappe.request.headers.get("X-Twilio-Signature", "")
+    validator = RequestValidator(auth_token)
+    if not validator.validate(get_request_url(), frappe.request.form, signature):
         frappe.throw(_("Invalid Twilio request signature"), frappe.PermissionError)
+
+
+def get_request_url() -> str:
+    """Returns the URL Twilio called, which is the one it signs."""
+    url = get_host_name_from_request() + frappe.request.path
+    query_string = frappe.request.query_string.decode()
+    return f"{url}?{query_string}" if query_string else url
 
 
 @frappe.whitelist()
