@@ -6,7 +6,13 @@ from frappe.utils import set_request
 from frappe.utils.password import set_encrypted_password
 from twilio.request_validator import RequestValidator
 
-from telephony.twilio.api import twilio_incoming_call_handler, validate_twilio_request
+from telephony.twilio.api import (
+    twilio_incoming_call_handler,
+    update_call_status_info,
+    update_recording_info,
+    validate_twilio_request,
+    voice,
+)
 
 AUTH_TOKEN = "test-auth-token"
 HOST = "calls.example.com"
@@ -54,6 +60,26 @@ class TestTwilioWebhookSignature(IntegrationTestCase):
             with self.assertRaises(frappe.PermissionError):
                 twilio_incoming_call_handler(**data)
         self.assertFalse(frappe.db.exists("TP Call Log", FORM["CallSid"]))
+
+    def test_every_webhook_rejects_unsigned_requests(self):
+        webhooks = [
+            voice,
+            twilio_incoming_call_handler,
+            update_recording_info,
+            update_call_status_info,
+        ]
+        self.make_request()
+        with (
+            patch("telephony.twilio.api.Twilio") as twilio,
+            patch("telephony.twilio.api.create_call_log") as create_call_log,
+            patch("telephony.twilio.api.update_call_log") as update_call_log,
+        ):
+            for webhook in webhooks:
+                with self.subTest(webhook=webhook.__name__):
+                    with self.assertRaises(frappe.PermissionError):
+                        webhook(**FORM)
+        for mock in (twilio, create_call_log, update_call_log):
+            self.assertFalse(mock.mock_calls)
 
     def test_rejects_when_twilio_is_disabled(self):
         frappe.db.set_single_value("TP Twilio Settings", "enabled", 0)
